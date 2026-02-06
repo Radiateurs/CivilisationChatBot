@@ -67,7 +67,7 @@ module.exports = function createDb(path) {
                     db.run(
                         `INSERT INTO civs(name) VALUES(?)`,
                         [name],
-                        (err) => (err ? reject(err) : resolve()))
+                        (err, row) => (err ? reject(err) : resolve(row)))
                 }
                 );
 

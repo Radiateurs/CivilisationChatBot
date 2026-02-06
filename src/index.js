@@ -3,8 +3,7 @@ const { token, guildId, gmChannelId } = require("../config.json");
 const { loadCommands, registerCommands } = require("./commands/_loader");
 const createDb = require("./services/db");
 const createDelivery = require("./services/deliveryService");
-const rateLimiter = require("./services/rateLimitService");
-
+const createRateLimiter = require("./services/rateLimitService");
 const db = createDb("../bot.db");
 const commands = loadCommands();
 
@@ -36,6 +35,8 @@ client.on("interactionCreate", async (interaction) => {
     gmMailboxChannelId: gmChannelId,
     db
   });
+
+  const rateLimiter = createRateLimiter(db);
 
   await cmd.execute(interaction, { db, rateLimiter, delivery });
 });

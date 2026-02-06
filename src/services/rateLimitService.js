@@ -1,6 +1,10 @@
+function nowSec() {
+  return Math.floor(Date.now() / 1000);
+}
+
 module.exports = function createRateLimiter(db) {
   return {
-    nowSec: () => { Math.floor(Date.now() / 1000) },
+    nowSec,
 
     async canSend(fromCiv, toCiv) {
       const rule = await db.rules.getBetween(fromCiv, toCiv);

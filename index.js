@@ -1,6 +1,6 @@
 const { Client, GatewayIntentBits, Partials, REST, Routes, SlashCommandBuilder } = require("discord.js");
 const sqlite3 = require("sqlite3").verbose();
-const { token, guildId } = require("./config.json");
+const { token, guildId, gmChannelId } = require("./config.json");
 
 const db = new sqlite3.Database("./bot.db");
 
@@ -60,7 +60,7 @@ function getPlayer(userId) {
   return new Promise((resolve, reject) => {
     db.get(
       `SELECT players.user_id, players.role, civs.id as civ_id, civs.name as civ_name
-       FROM players JOIN civs ON players.civ_id = civs.id
+       FROM players LEFT JOIN civs ON players.civ_id = civs.id
        WHERE players.user_id = ?`,
       [userId],
       (err, row) => err ? reject(err) : resolve(row)
@@ -140,6 +140,51 @@ async function recordSend(fromCiv, toCiv, body) {
   });
 }
 
+async function postToGmMailbox({ client, guildId, gmMailboxChannelId, title, content }) {
+  if (!gmMailboxChannelId) {
+    console.warn("[GM MAILBOX] gmMailboxChannelId not set; cannot post fallback.");
+    return;
+  }
+
+  try {
+    const guild = await client.guilds.fetch(guildId);
+    const channel = await guild.channels.fetch(gmMailboxChannelId);
+
+    if (!channel || !channel.isTextBased()) {
+      console.warn("[GM MAILBOX] Channel not found or not text-based.");
+      return;
+    }
+
+    await channel.send(`🛑 **${title}**\n${content}`);
+  } catch (e) {
+    console.warn("[GM MAILBOX] Failed to post to mailbox:", e?.message || e);
+  }
+}
+
+function formatDuration(seconds) {
+  seconds = Math.max(0, Math.floor(seconds));
+
+  const units = [
+    ["week", 7 * 24 * 3600],
+    ["day", 24 * 3600],
+    ["hour", 3600],
+    ["min", 60],
+    ["sec", 1],
+  ];
+
+  const parts = [];
+  for (const [name, size] of units) {
+    const count = Math.floor(seconds / size);
+    if (count > 0) {
+      parts.push(`${count} ${name}${count === 1 ? "" : "s"}`);
+      seconds -= count * size;
+    }
+    if (parts.length >= 2) break; // keep it short (e.g. "1 day 3 hours")
+  }
+
+  return parts.length ? parts.join(" ") : "0 sec";
+}
+
 // ---------- Discord setup ----------
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.DirectMessages],
@@ -179,15 +224,26 @@ const commands = [
 
   new SlashCommandBuilder()
     .setName("gm_claim")
-    .setDescription("Claim GM role (only works if no GM exists yet)")
+    .setDescription("Claim GM role (only works if no GM exists yet)"),
+
+  new SlashCommandBuilder()
+    .setName("diplomacy")
+    .setDescription("List known civilizations and messaging cadence you have with them."),
+
 ].map(c => c.toJSON());
 
 async function registerCommands() {
   const rest = new REST({ version: "10" }).setToken(token);
+
+  const appId = (await client.application.fetch()).id;
+
+  // Register to ONE guild (fast propagation)
   await rest.put(
-    Routes.applicationCommands((await client.application.fetch()).id),
+    Routes.applicationGuildCommands(appId, guildId),
     { body: commands }
   );
+
+  console.log("Guild slash commands registered");
 }
 
 function requireGM(player) {
@@ -210,6 +266,62 @@ client.on("interactionCreate", async (interaction) => {
       return interaction.reply({ content: `You are **${player.civ_name}**.`, ephemeral: true });
     }
 
+    if (interaction.commandName === "diplomacy") {
+      const player = await getPlayer(interaction.user.id);
+      if (!player || !player.civ_id) {
+        return interaction.reply({ content: "You are not registered to a civilization yet.", ephemeral: true });
+      }
+
+      // Rules for any pair involving player's civ
+      const rows = await new Promise((resolve, reject) => {
+        db.all(
+          `
+      SELECT
+        pr.interval_seconds,
+        pr.max_messages,
+        pr.window_type,
+        cs.id AS civ_small_id,
+        cs.name AS civ_small_name,
+        cl.id AS civ_large_id,
+        cl.name AS civ_large_name
+      FROM pair_rules pr
+      JOIN civs cs ON cs.id = pr.civ_small
+      JOIN civs cl ON cl.id = pr.civ_large
+      WHERE pr.civ_small = ? OR pr.civ_large = ?
+      ORDER BY
+        pr.interval_seconds ASC,
+        (CASE WHEN pr.civ_small = ? THEN cl.name ELSE cs.name END) COLLATE NOCASE ASC
+      `,
+          [player.civ_id, player.civ_id, player.civ_id],
+          (err, rows) => (err ? reject(err) : resolve(rows))
+        );
+      });
+
+      if (!rows.length) {
+        return interaction.reply({
+          content: `No diplomacy rules found for **${player.civ_name ?? "your civilization"}** yet.`,
+          ephemeral: true
+        });
+      }
+
+      const lines = rows.map(r => {
+        const otherName = (r.civ_small_id === player.civ_id) ? r.civ_large_name : r.civ_small_name;
+        const cadence = `${r.max_messages} msg / ${formatDuration(r.interval_seconds)}`;
+        const model = r.window_type ? ` (${r.window_type})` : "";
+        return `• **${otherName}** — ${cadence}${model}`;
+      });
+
+      // Keep under Discord message limits; trim if huge
+      const header = `📜 **Diplomacy for ${player.civ_name ?? "your civilization"}**\n`;
+      const body = lines.slice(0, 40).join("\n");
+      const footer = lines.length > 40 ? `\n…and ${lines.length - 40} more.` : "";
+
+      return interaction.reply({
+        content: header + body + footer,
+        ephemeral: true
+      });
+    }
+
     if (interaction.commandName === "send") {
       const player = await getPlayer(interaction.user.id);
       if (!player) return interaction.reply({ content: "You are not registered yet.", ephemeral: true });
@@ -224,6 +336,7 @@ client.on("interactionCreate", async (interaction) => {
       const allowed = await canSend(player.civ_id, target.id);
       if (!allowed.ok) return interaction.reply({ content: allowed.reason, ephemeral: true });
 
+      let replySent = false;
       // Deliver to the owner (first player) of the target civ
       db.get(
         `SELECT user_id FROM players WHERE civ_id = ? ORDER BY rowid ASC LIMIT 1`,
@@ -235,67 +348,93 @@ client.on("interactionCreate", async (interaction) => {
           }
 
           if (!row) {
+            await postToGmMailbox({
+              client,
+              guildId,
+              gmMailboxChannelId: gmChannelId,
+              title: "No owner found for target civilization",
+              content: `**To Civ:** ${targetName} (id=${target.id})\n**From Civ:** ${player.civ_name} (${interaction.user.displayName})\n\n**Message:**\n> ${body}`
+            });
             console.warn("No owner found for target civilization");
+            replySent = true;
             return interaction.reply({ content: `🤔 It appears this civilization doesn't have a letterbox....`, ephemeral: true });
           }
 
           try {
             const user = await client.users.fetch(row.user_id);
+            await postToGmMailbox({
+              client,
+              guildId,
+              gmMailboxChannelId: gmChannelId,
+              title: "Message sent between civilizations",
+              content: `**To Civ:** ${targetName} (id=${target.id})\n**From Civ:** ${player.civ_name} (${interaction.user.displayName})\n\n**Message:**\n> ${body}`
+            });
             await user.send(`📨 **Diplomatic message received from ${player.civ_name}**\n> ${body}`);
           } catch (e) {
             // DM failed (user has DMs closed or blocked the bot)
+            const reason = e?.message || String(e);
             console.warn("Failed to deliver DM to civ owner:", e.message);
+            await postToGmMailbox({
+              client,
+              guildId,
+              gmMailboxChannelId: gmChannelId,
+              title: "DM delivery failed",
+              content: `**To Civ:** ${targetName} (id=${target.id})\n**From Civ:** ${player.civ_name} (${interaction.user.displayName})\n\n**Message:**\n> ${body}\n\nDM Error: ${reason}`
+            });
+            replySent = true;
             return interaction.reply({ content: `💀 It appears your messenger did not made it to its destination...`, ephemeral: true });
           }
         }
       );
 
-      await recordSend(player.civ_id, target.id, body);
-      return interaction.reply({ content: `Sent anonymously to **${target.name}**.`, ephemeral: true });
-    }
-
-    if (interaction.commandName === "gm_claim") {
-      // Check if a GM already exists
-      db.get(
-        `SELECT user_id FROM players WHERE role = 'gm' LIMIT 1`,
-        async (err, row) => {
-          if (err) {
-            console.error(err);
-            return interaction.reply({ content: "Database error.", ephemeral: true });
-          }
-
-          if (row) {
-            return interaction.reply({
-              content: "❌ A GM already exists. Only a GM can assign new GMs.",
-              ephemeral: true
-            });
-          }
-
-          // Promote this user to GM
-          db.run(
-            `INSERT INTO players(user_id, civ_id, role)
-         VALUES(?, -1, 'gm')
-         ON CONFLICT(user_id) DO UPDATE SET role = 'gm'`,
-            [interaction.user.id],
-            (err) => {
-              if (err) {
-                console.error(err);
-                return interaction.reply({ content: "Failed to claim GM role.", ephemeral: true });
-              }
-
-              interaction.reply({
-                content: "👑 You are now the Game Master.",
-                ephemeral: true
-              });
-            }
-          );
-        }
-      );
+      if (!replySent) {
+        await recordSend(player.civ_id, target.id, body);
+        return interaction.reply({ content: `Sent anonymously to **${target.name}**.`, ephemeral: true });
+      }
     }
 
     // GM commands
     if (interaction.commandName.startsWith("gm_")) {
       const player = await getPlayer(interaction.user.id);
+      if (interaction.commandName === "gm_claim") {
+        // Check if a GM already exists
+        db.get(
+          `SELECT user_id FROM players WHERE role = 'gm' LIMIT 1`,
+          async (err, row) => {
+            if (err) {
+              console.error(err);
+              return interaction.reply({ content: "Database error.", ephemeral: true });
+            }
+
+            if (row) {
+              return interaction.reply({
+                content: "❌ A GM already exists. Only a GM can assign new GMs.",
+                ephemeral: true
+              });
+            }
+
+            // Promote this user to GM
+            db.run(
+              `INSERT INTO players(user_id, civ_id, role)
+         VALUES(?, -1, 'gm')
+         ON CONFLICT(user_id) DO UPDATE SET role = 'gm'`,
+              [interaction.user.id],
+              (err) => {
+                if (err) {
+                  console.error(err);
+                  return interaction.reply({ content: "Failed to claim GM role.", ephemeral: true });
+                }
+
+                interaction.reply({
+                  content: "👑 You are now the Game Master.",
+                  ephemeral: true
+                });
+              }
+            );
+          }
+        );
+        return;
+      }
       if (!requireGM(player)) {
         return interaction.reply({ content: "GM only.", ephemeral: true });
       }

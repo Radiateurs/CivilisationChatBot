@@ -1,0 +1,24 @@
+{
+  "name": "civilisationchatbot",
+  "version": "1.0.0",
+  "description": "A discord Chat bot that allow players to send anonymous message at control intervals between civilisations",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Radiateurs/CivilisationChatBot.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Radiateurs/CivilisationChatBot/issues"
+  },
+  "homepage": "https://github.com/Radiateurs/CivilisationChatBot#readme",
+  "dependencies": {
+    "discord.js": "^14.25.1",
+    "sqlite3": "^5.1.7"
+  }
+}

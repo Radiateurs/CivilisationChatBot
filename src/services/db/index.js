@@ -34,6 +34,15 @@ module.exports = function createDb(path) {
       sent_at INTEGER NOT NULL,
       body TEXT NOT NULL
     )`);
+    db.run(`CREATE TABLE IF NOT EXISTS pending_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      from_civ INTEGER NOT NULL,
+      to_civ INTEGER NOT NULL,
+      sender_user_id TEXT NOT NULL,
+      body TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at INTEGER NOT NULL
+      )`);
     });
 
     return {
@@ -123,6 +132,51 @@ module.exports = function createDb(path) {
                     );
                 });
             }
+        },
+        pendingMessages: {
+          create({ fromCiv, toCiv, senderUserId, body }) {
+            const createdAt = Math.floor(Date.now() / 1000);
+
+            return new Promise((resolve, reject) => {
+              db.run(
+                `INSERT INTO pending_messages(from_civ, to_civ, sender_user_id, body, created_at)
+                VALUES(?, ?, ?, ?, ?)`,
+                [fromCiv, toCiv, senderUserId, body, createdAt],
+                function (err) {
+                  if (err) return reject(err);
+                  resolve({
+                    id: this.lastID,
+                    from_civ: fromCiv,
+                    to_civ: toCiv,
+                    sender_user_id: senderUserId,
+                    body,
+                    status: "pending",
+                    created_at: createdAt
+                  });
+                }
+              );
+            });
+          },
+
+          getById(id) {
+            return new Promise((resolve, reject) => {
+              db.get(
+                `SELECT * FROM pending_messages WHERE id = ?`,
+                [id],
+                (err, row) => err ? reject(err) : resolve(row)
+              );
+            });
+          },
+
+          markStatus(id, status) {
+            return new Promise((resolve, reject) => {
+              db.run(
+                `UPDATE pending_messages SET status = ? WHERE id = ?`,
+                [status, id],
+                err => err ? reject(err) : resolve()
+              );
+            });
+          }
         }
     };
 };

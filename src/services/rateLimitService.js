@@ -6,12 +6,13 @@ module.exports = function createRateLimiter(db) {
   return {
     nowSec,
 
-    async canSend(fromCiv, toCiv) {
+    async canSend(fromCiv, toCiv, body) {
       const rule = await db.rules.getBetween(fromCiv, toCiv);
-      if (!rule) return { ok: false, reason: "No diplomacy rule set for that pair yet." };
-
+      if (!rule)
+        return { ok: false, reason: "No diplomacy rule set for that pair yet." };
       const usage = await db.usage.getLastSent(fromCiv, toCiv);
-      if (!usage || !usage.last_sent_at) return { ok: true, rule };
+      if (!usage || !usage.last_sent_at)
+        return { ok: true, rule };
 
       const t = nowSec();
       const elapsed = t - usage.last_sent_at;

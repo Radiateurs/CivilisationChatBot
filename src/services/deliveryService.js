@@ -14,9 +14,60 @@ async function postToGmMailbox({ client, guildId, gmMailboxChannelId, title, con
 
 module.exports = function createDeliveryService({ client, guildId, gmMailboxChannelId, db }) {
   return {
-    postToGmMailbox: (title, content) =>
-      postToGmMailbox({ client, guildId, gmMailboxChannelId, title, content }),
+    async postToGmMailbox({ title, content, components = [] }) {
+      if (!gmMailboxChannelId) {
+        console.warn("[GM MAILBOX] gmMailboxChannelId is not set.");
+        return null;
+      }
 
+      try {
+        const guild = await client.guilds.fetch(guildId);
+        const channel = await guild.channels.fetch(gmMailboxChannelId);
+
+        if (!channel || !channel.isTextBased()) {
+          console.warn("[GM MAILBOX] Channel not found or not text-based.");
+          return null;
+        }
+
+        return await channel.send({
+          content: `🛂 **${title}**\n${content}`,
+          components
+        });
+      } catch (err) {
+        console.warn("[GM MAILBOX] Failed to post:", err?.message || err);
+        return null;
+      }
+    },
+    async dmCivOwnerById({ targetCivId, body }) {
+      const row = await new Promise((resolve, reject) => {
+        db.raw.get(
+          `SELECT user_id FROM players WHERE civ_id = ? ORDER BY rowid ASC LIMIT 1`,
+          [targetCivId],
+          (err, row) => err ? reject(err) : resolve(row)
+        );
+      });
+
+      if (!row) {
+        return { ok: false, reason: "NO_OWNER" };
+      }
+
+      try {
+        const user = await client.users.fetch(row.user_id);
+        await user.send(`📨 **Diplomatic message received**\n> ${body}`);
+        return { ok: true };
+      } catch (err) {
+        await this.postToGmMailbox({
+          title: "DM delivery failed",
+          content:
+            `**Target Civ ID:** ${targetCivId}\n` +
+            `**Owner User ID:** ${row.user_id}\n\n` +
+            `**Message:**\n> ${body}\n\n` +
+            `**Error:** ${err?.message || err}`
+        });
+
+        return { ok: false, reason: "DM_FAILED" };
+      }
+    },
     async dmCivOwnerOrMailbox({ targetCivId, targetCivName, fromCivName, fromDiscordName, body }) {
       // owner = first row for civ
       const row = await new Promise((resolve, reject) => {

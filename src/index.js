@@ -1,11 +1,14 @@
 const { Client, GatewayIntentBits, Partials } = require("discord.js");
 const { token, guildId, gmChannelId } = require("../config.json");
 const { loadCommands, registerCommands } = require("./commands/_loader");
+const { loadInteractionHandlers, findHandler } = require("./interactions/_loader");
 const createDb = require("./services/db");
 const createDelivery = require("./services/deliveryService");
 const createRateLimiter = require("./services/rateLimitService");
 const db = createDb("../bot.db");
 const commands = loadCommands();
+const interactionHandlers = loadInteractionHandlers();
+const rateLimiter = createRateLimiter(db);
 
 console.log("Loaded commands:", [...commands.keys()]);
 
@@ -22,13 +25,6 @@ client.on("ready", async () => {
 });
 
 client.on("interactionCreate", async (interaction) => {
-  if (!interaction.isChatInputCommand()) return;
-
-  const cmd = commands.get(interaction.commandName);
-  if (!cmd) {
-    interaction.reply({ content: "Unrecognized command... Try something else!", ephemeral: true })
-  };
-
   const delivery = createDelivery({
     client,
     guildId,
@@ -36,9 +32,46 @@ client.on("interactionCreate", async (interaction) => {
     db
   });
 
-  const rateLimiter = createRateLimiter(db);
+  const ctx = {
+    db,
+    rateLimiter,
+    delivery,
+    client,
+    config: { guildId, gmChannelId }
+  };
 
-  await cmd.execute(interaction, { db, rateLimiter, delivery });
+  try {
+    if (interaction.isButton()) {
+      const handler = findHandler(interactionHandlers.buttons, interaction.customId);
+      if (!handler) return;
+
+      return handler.execute(interaction, ctx);
+    }
+
+    if (interaction.isModalSubmit()) {
+      const handler = findHandler(interactionHandlers.modals, interaction.customId);
+      if (!handler) return;
+
+      return handler.execute(interaction, ctx);
+    }
+
+    if (interaction.isChatInputCommand()) {
+      const command = commands.get(interaction.commandName);
+      if (!command) return;
+
+      return command.execute(interaction, ctx);
+    }
+  } catch (e) {
+    console.error(e);
+
+    if (!interaction.replied && !interaction.deferred) {
+      return interaction.reply({
+        content: "Something went wrong.",
+        ephemeral: true
+      }).catch(() => {});
+    }
+  }
+
 });
 
 client.login(token);

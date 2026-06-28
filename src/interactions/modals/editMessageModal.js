@@ -6,16 +6,18 @@ module.exports = {
 
     const gm = await db.players.getByUserId(interaction.user.id);
     if (!gm || gm.role !== "gm") {
-      return interaction.reply({ content: "GM only.", ephemeral: true });
+      return interaction.reply({ content: "GM only.", flags: 64 });
     }
 
     const pending = await db.pendingMessages.getById(id);
     if (!pending || pending.status !== "pending") {
       return interaction.reply({
         content: "This message is no longer pending.",
-        ephemeral: true
+        flags: 64
       });
     }
+
+    await interaction.deferReply({ ephemeral: true });
 
     const editedBody = interaction.fields.getTextInputValue("message");
 
@@ -27,9 +29,8 @@ module.exports = {
     await rateLimiter.recordSend(pending.from_civ, pending.to_civ, editedBody);
     await db.pendingMessages.markStatus(id, "sent_modified");
 
-    return interaction.reply({
-      content: `✅ Edited message #${id} sent.`,
-      ephemeral: true
+    return interaction.editReply({
+      content: `✅ Edited message #${id} sent.`
     });
   }
 };

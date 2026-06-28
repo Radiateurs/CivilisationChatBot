@@ -76,10 +76,16 @@ module.exports = function createDb(path) {
                     db.run(
                         `INSERT INTO civs(name) VALUES(?)`,
                         [name],
-                        (err, row) => (err ? reject(err) : resolve(row)))
-                }
-                );
+                        function (err) {
+                            if (err) {
+                                reject(err);
+                                return;
+                            }
 
+                            resolve({ id: this.lastID, name });
+                        }
+                    );
+                });
             }
         },
 

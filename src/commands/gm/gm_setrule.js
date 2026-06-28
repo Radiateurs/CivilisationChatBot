@@ -44,29 +44,35 @@ module.exports = {
     const max = interaction.options.getInteger("max_messages", true);
     const [small, large] = canonicalPair(civ1.id, civ2.id);
 
-    db.raw.run(
-      `INSERT INTO pair_rules(civ_small, civ_large, interval_seconds, max_messages, window_type)
-       VALUES(?, ?, ?, ?, 'cooldown')
-       ON CONFLICT(civ_small, civ_large)
-       DO UPDATE SET
-         interval_seconds = excluded.interval_seconds,
-         max_messages = excluded.max_messages`,
-      [small, large, interval, max],
-      (err) => {
-        if (err) {
-          return interaction.reply({
-            content: `Error: ${err.message}`,
-            ephemeral: true
-          });
-        }
+    const existingRule = await new Promise((resolve, reject) => {
+      db.raw.get(
+        `SELECT 1 FROM pair_rules WHERE civ_small = ? AND civ_large = ?`,
+        [small, large],
+        (err, row) => (err ? reject(err) : resolve(row))
+      );
+    });
 
-        interaction.reply({
-          content:
-            `Rule set for **${civ1.name} ↔ ${civ2.name}**: ` +
-            `${max} msg / ${interval}s (cooldown).`,
-          ephemeral: true
-        });
-      }
-    );
+    const action = existingRule ? "updated" : "set";
+    const query = existingRule
+      ? `UPDATE pair_rules
+         SET interval_seconds = ?, max_messages = ?, window_type = 'cooldown'
+         WHERE civ_small = ? AND civ_large = ?`
+      : `INSERT INTO pair_rules(civ_small, civ_large, interval_seconds, max_messages, window_type)
+         VALUES(?, ?, ?, ?, 'cooldown')`;
+
+    const params = existingRule
+      ? [interval, max, small, large]
+      : [small, large, interval, max];
+
+    await new Promise((resolve, reject) => {
+      db.raw.run(query, params, (err) => (err ? reject(err) : resolve()));
+    });
+
+    return interaction.reply({
+      content:
+        `Rule ${action} for **${civ1.name} ↔ ${civ2.name}**: ` +
+        `${max} msg / ${interval}s (cooldown).`,
+      ephemeral: true
+    });
   }
 };

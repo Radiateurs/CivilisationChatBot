@@ -22,8 +22,9 @@ module.exports = {
         let civ = await db.civs.getByName(civName);
         if (!civ) {
             try {
-                civ = await db.civs.createCiv(civName);
-            } catch {
+                const createdCiv = await db.civs.createCiv(civName);
+                civ = createdCiv;
+            } catch (err) {
                 return interaction.reply({
                     content: `Error: ${err.message}`,
                     ephemeral: true
